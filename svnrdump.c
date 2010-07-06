@@ -9,10 +9,38 @@
 #include "svn_repos.h"
 #include "svn_path.h"
 
+#include "debug_editor.h"
+#include "dump_editor.h"
+#include "dumpr_util.h"
+
 static int verbose = 0;
 static apr_pool_t *pool = NULL;
 static svn_client_ctx_t *ctx = NULL;
 static svn_ra_session_t *session = NULL;
+
+static svn_error_t *replay_revstart(svn_revnum_t revision,
+                                    void *replay_baton,
+                                    const svn_delta_editor_t **editor,
+                                    void **edit_baton,
+                                    apr_hash_t *rev_props,
+                                    apr_pool_t *pool)
+{
+	struct replay_baton *rb = replay_baton;
+	*editor = rb->editor;
+	*edit_baton = rb->edit_baton;
+
+	return SVN_NO_ERROR;
+}
+
+static svn_error_t *replay_revend(svn_revnum_t revision,
+                                  void *replay_baton,
+                                  const svn_delta_editor_t *editor,
+                                  void *edit_baton,
+                                  apr_hash_t *rev_props,
+                                  apr_pool_t *pool)
+{
+	return SVN_NO_ERROR;
+}
 
 static svn_error_t *open_connection(const char *url)
 {
@@ -33,6 +61,25 @@ static svn_error_t *open_connection(const char *url)
 
 static svn_error_t *replay_range(svn_revnum_t start_revision, svn_revnum_t end_revision)
 {
+	const svn_delta_editor_t *dump_editor, *debug_editor;
+	void *debug_baton, *dump_baton;
+
+	SVN_ERR(get_dump_editor(&dump_editor,
+	                        &dump_baton, start_revision, pool));
+
+	SVN_ERR(svn_delta__get_debug_editor(&debug_editor,
+	                                    &debug_baton,
+	                                    dump_editor,
+	                                    dump_baton, pool));
+
+	struct replay_baton *replay_baton = apr_palloc(pool, sizeof(struct replay_baton));
+	replay_baton->editor = debug_editor;
+	replay_baton->edit_baton = debug_baton;
+	SVN_ERR(svn_cmdline_printf(pool, SVN_REPOS_DUMPFILE_MAGIC_HEADER ": %d\n",
+				   SVN_REPOS_DUMPFILE_FORMAT_VERSION));
+	SVN_ERR(svn_ra_replay_range(session, start_revision, end_revision,
+	                            0, TRUE, replay_revstart, replay_revend,
+	                            replay_baton, pool));
 	return SVN_NO_ERROR;
 }
 
