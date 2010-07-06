@@ -25,6 +25,39 @@ static svn_error_t *replay_revstart(svn_revnum_t revision,
                                     apr_hash_t *rev_props,
                                     apr_pool_t *pool)
 {
+	/* Editing this revision has just started; dump the revprops
+	   before invoking the editor callbacks */
+	svn_stringbuf_t *propstring = svn_stringbuf_create("", pool);
+	svn_stream_t *stdout_stream;
+
+	/* Create an stdout stream */
+	svn_stream_for_stdout(&stdout_stream, pool);
+
+        /* Print revision number and prepare the propstring */
+	SVN_ERR(svn_stream_printf(stdout_stream, pool,
+				  SVN_REPOS_DUMPFILE_REVISION_NUMBER
+				  ": %ld\n", revision));
+	write_hash_to_stringbuf(rev_props, FALSE, &propstring, pool);
+	svn_stringbuf_appendbytes(propstring, "PROPS-END\n", 10);
+
+	/* prop-content-length header */
+	SVN_ERR(svn_stream_printf(stdout_stream, pool,
+				  SVN_REPOS_DUMPFILE_PROP_CONTENT_LENGTH
+				  ": %" APR_SIZE_T_FMT "\n", propstring->len));
+
+	/* content-length header */
+	SVN_ERR(svn_stream_printf(stdout_stream, pool,
+				  SVN_REPOS_DUMPFILE_CONTENT_LENGTH
+				  ": %" APR_SIZE_T_FMT "\n\n", propstring->len));
+
+	/* Print the revprops now */
+	SVN_ERR(svn_stream_write(stdout_stream, propstring->data,
+				 &(propstring->len)));
+
+	svn_stream_close(stdout_stream);
+
+	/* Extract editor and editor_baton from the replay_baton and
+	   set them so that the editor callbacks can use them */
 	struct replay_baton *rb = replay_baton;
 	*editor = rb->editor;
 	*edit_baton = rb->edit_baton;
@@ -39,6 +72,9 @@ static svn_error_t *replay_revend(svn_revnum_t revision,
                                   apr_hash_t *rev_props,
                                   apr_pool_t *pool)
 {
+	/* Editor has finished for this revision and close_edit has
+	   been called; do nothing: just continue to the next
+	   revision */
 	return SVN_NO_ERROR;
 }
 
@@ -73,8 +109,8 @@ static svn_error_t *replay_range(svn_revnum_t start_revision, svn_revnum_t end_r
 	                                    dump_baton, pool));
 
 	struct replay_baton *replay_baton = apr_palloc(pool, sizeof(struct replay_baton));
-	replay_baton->editor = debug_editor;
-	replay_baton->edit_baton = debug_baton;
+	replay_baton->editor = dump_editor;
+	replay_baton->edit_baton = dump_baton;
 	SVN_ERR(svn_cmdline_printf(pool, SVN_REPOS_DUMPFILE_MAGIC_HEADER ": %d\n",
 				   SVN_REPOS_DUMPFILE_FORMAT_VERSION));
 	SVN_ERR(svn_ra_replay_range(session, start_revision, end_revision,
