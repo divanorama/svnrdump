@@ -225,6 +225,15 @@ static svn_error_t *delete_entry(const char *path,
 				 void *parent_baton,
 				 apr_pool_t *pool)
 {
+	struct dir_baton *pb = parent_baton;
+	const char *mypath = apr_pstrdup(pb->pool, path);
+
+	/* Some pending properties to dump? */
+	SVN_ERR(dump_props(pb->eb, &(pb->eb->dump_props_pending), TRUE, pool));
+
+	/* remember this path needs to be deleted */
+	apr_hash_set(pb->deleted_entries, mypath, APR_HASH_KEY_STRING, pb);
+
 	return SVN_NO_ERROR;
 }
 
@@ -235,7 +244,35 @@ static svn_error_t *add_directory(const char *path,
 				  apr_pool_t *pool,
 				  void **child_baton)
 {
-	*child_baton = NULL;
+	struct dir_baton *pb = parent_baton;
+	void *val;
+	struct dir_baton *new_db
+		= make_dir_baton(path, copyfrom_path, copyfrom_rev, pb->eb, pb, TRUE, pool);
+
+	/* Some pending properties to dump? */
+	SVN_ERR(dump_props(pb->eb, &(pb->eb->dump_props_pending), TRUE, pool));
+
+	/* This might be a replacement -- is the path already deleted? */
+	val = apr_hash_get(pb->deleted_entries, path, APR_HASH_KEY_STRING);
+
+	/* Detect an add-with-history */
+	pb->eb->is_copy = ARE_VALID_COPY_ARGS(copyfrom_path, copyfrom_rev);
+
+	/* Dump the node */
+	SVN_ERR(dump_node(pb->eb, path,
+	                  svn_node_dir,
+	                  val ? svn_node_action_replace : svn_node_action_add,
+	                  pb->eb->is_copy ? copyfrom_path : NULL,
+	                  pb->eb->is_copy ? copyfrom_rev : SVN_INVALID_REVNUM,
+	                  pool));
+
+	if (val)
+		/* Delete the path, it's now been dumped */
+		apr_hash_set(pb->deleted_entries, path, APR_HASH_KEY_STRING, NULL);
+
+	new_db->written_out = TRUE;
+
+	*child_baton = new_db;
 	return SVN_NO_ERROR;
 }
 
@@ -245,13 +282,56 @@ static svn_error_t *open_directory(const char *path,
 				   apr_pool_t *pool,
 				   void **child_baton)
 {
-	*child_baton = NULL;
+	struct dir_baton *pb = parent_baton;
+	struct dir_baton *new_db;
+	const char *cmp_path = NULL;
+	svn_revnum_t cmp_rev = SVN_INVALID_REVNUM;
+	apr_array_header_t *compose_path = apr_array_make(pool, 2, sizeof(const char *));
+
+	/* Some pending properties to dump? */
+	SVN_ERR(dump_props(pb->eb, &(pb->eb->dump_props_pending), TRUE, pool));
+
+	/* If the parent directory has explicit comparison path and rev,
+	   record the same for this one. */
+	if (pb && ARE_VALID_COPY_ARGS(pb->cmp_path, pb->cmp_rev)) {
+		APR_ARRAY_PUSH(compose_path, const char *) = pb->cmp_path;
+		APR_ARRAY_PUSH(compose_path, const char *) = svn_relpath_basename(path, pool);
+		cmp_path = svn_path_compose(compose_path, pool);
+		cmp_rev = pb->cmp_rev;
+	}
+
+	new_db = make_dir_baton(path, cmp_path, cmp_rev, pb->eb, pb, FALSE, pool);
+	*child_baton = new_db;
 	return SVN_NO_ERROR;
 }
 
 static svn_error_t *close_directory(void *dir_baton,
 				    apr_pool_t *pool)
 {
+	struct dir_baton *db = dir_baton;
+	struct dump_edit_baton *eb = db->eb;
+	apr_hash_index_t *hi;
+	apr_pool_t *subpool = svn_pool_create(pool);
+
+	/* Some pending properties to dump? */
+	SVN_ERR(dump_props(eb, &(eb->dump_props_pending), TRUE, pool));
+
+	/* Dump the directory entries */
+	for (hi = apr_hash_first(pool, db->deleted_entries); hi;
+	     hi = apr_hash_next(hi)) {
+		const void *key;
+		const char *path;
+		apr_hash_this(hi, &key, NULL, NULL);
+		path = key;
+
+		svn_pool_clear(subpool);
+
+		SVN_ERR(dump_node(db->eb, path,
+		                  svn_node_unknown, svn_node_action_delete,
+		                  NULL, SVN_INVALID_REVNUM, subpool));
+	}
+
+	svn_pool_destroy(subpool);
 	return SVN_NO_ERROR;
 }
 
@@ -281,6 +361,34 @@ static svn_error_t *change_dir_prop(void *parent_baton,
 				    const svn_string_t *value,
 				    apr_pool_t *pool)
 {
+	struct dir_baton *db = parent_baton;
+
+	if (svn_property_kind(NULL, name) != svn_prop_regular_kind)
+		return SVN_NO_ERROR;
+
+	value ? apr_hash_set(db->eb->properties, apr_pstrdup(pool, name),
+	                     APR_HASH_KEY_STRING, svn_string_dup(value, pool)) :
+		apr_hash_set(db->eb->del_properties, apr_pstrdup(pool, name),
+		             APR_HASH_KEY_STRING, (void *)0x1);
+
+	/* This function is what distinguishes between a directory that is
+	   opened to merely get somewhere, vs. one that is opened because it
+	   actually changed by itself  */
+	if (! db->written_out) {
+		/* If eb->dump_props_pending was set, it means that the
+		   node information corresponding to add_directory has already
+		   been written; just don't unset it and dump_node will dump
+		   the properties before doing anything else. If it wasn't
+		   set, node information hasn't been written yet: so dump the
+		   node itself before dumping the props */
+
+		SVN_ERR(dump_node(db->eb, db->path,
+		                  svn_node_dir, svn_node_action_change,
+		                  db->cmp_path, db->cmp_rev, pool));
+
+		SVN_ERR(dump_props(db->eb, NULL, TRUE, pool));
+		db->written_out = TRUE;
+	}
 	return SVN_NO_ERROR;
 }
 
