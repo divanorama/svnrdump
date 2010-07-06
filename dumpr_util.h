@@ -64,6 +64,21 @@ struct dir_baton {
 	apr_pool_t *pool;
 };
 
+struct handler_baton
+{
+	svn_txdelta_window_handler_t apply_handler;
+	void *apply_baton;
+	apr_pool_t *pool;
+
+	/* Information about the path of the tempoarary file used */
+	char *temp_filepath;
+	apr_file_t *temp_file;
+	svn_stream_t *temp_filestream;
+
+	/* To fill in the edit baton fields */
+	struct dump_edit_baton *eb;
+};
+
 void write_hash_to_stringbuf(apr_hash_t *properties,
 			     svn_boolean_t deleted,
 			     svn_stringbuf_t **strbuf,

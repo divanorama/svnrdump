@@ -342,7 +342,34 @@ static svn_error_t *add_file(const char *path,
 			     apr_pool_t *pool,
 			     void **file_baton)
 {
-	*file_baton = NULL;
+	struct dir_baton *pb = parent_baton;
+	void *val;
+
+	/* Some pending properties to dump? */
+	SVN_ERR(dump_props(pb->eb, &(pb->eb->dump_props_pending), TRUE, pool));
+
+	/* This might be a replacement -- is the path already deleted? */
+	val = apr_hash_get(pb->deleted_entries, path, APR_HASH_KEY_STRING);
+
+	/* Detect add-with-history. */
+	pb->eb->is_copy = ARE_VALID_COPY_ARGS(copyfrom_path, copyfrom_rev);
+
+	/* Dump the node. */
+	SVN_ERR(dump_node(pb->eb, path,
+	                  svn_node_file,
+	                  val ? svn_node_action_replace : svn_node_action_add,
+	                  pb->eb->is_copy ? copyfrom_path : NULL,
+	                  pb->eb->is_copy ? copyfrom_rev : SVN_INVALID_REVNUM,
+	                  pool));
+
+	if (val)
+		/* delete the path, it's now been dumped. */
+		apr_hash_set(pb->deleted_entries, path, APR_HASH_KEY_STRING, NULL);
+
+	/* Build a nice file baton to pass to change_file_prop and apply_textdelta */
+	pb->eb->changed_path = path;
+	*file_baton = pb->eb;
+
 	return SVN_NO_ERROR;
 }
 
@@ -352,7 +379,31 @@ static svn_error_t *open_file(const char *path,
 			      apr_pool_t *pool,
 			      void **file_baton)
 {
-	*file_baton = NULL;
+	struct dir_baton *pb = parent_baton;
+	const char *cmp_path = NULL;
+	svn_revnum_t cmp_rev = SVN_INVALID_REVNUM;
+
+	/* Some pending properties to dump? */
+	SVN_ERR(dump_props(pb->eb, &(pb->eb->dump_props_pending), TRUE, pool));
+
+	apr_array_header_t *compose_path = apr_array_make(pool, 2, sizeof(const char *));
+	/* If the parent directory has explicit comparison path and rev,
+	   record the same for this one. */
+	if (pb && ARE_VALID_COPY_ARGS(pb->cmp_path, pb->cmp_rev)) {
+		APR_ARRAY_PUSH(compose_path, const char *) = pb->cmp_path;
+		APR_ARRAY_PUSH(compose_path, const char *) = svn_relpath_basename(path, pool);
+		cmp_path = svn_path_compose(compose_path, pool);
+		cmp_rev = pb->cmp_rev;
+	}
+
+	SVN_ERR(dump_node(pb->eb, path,
+	                  svn_node_file, svn_node_action_change,
+	                  cmp_path, cmp_rev, pool));
+
+	/* Build a nice file baton to pass to change_file_prop and apply_textdelta */
+	pb->eb->changed_path = path;
+	*file_baton = pb->eb;
+
 	return SVN_NO_ERROR;
 }
 
@@ -397,6 +448,44 @@ static svn_error_t *change_file_prop(void *file_baton,
 				     const svn_string_t *value,
 				     apr_pool_t *pool)
 {
+	struct dump_edit_baton *eb = file_baton;
+
+	if (svn_property_kind(NULL, name) != svn_prop_regular_kind)
+		return SVN_NO_ERROR;
+
+	apr_hash_set(eb->properties, apr_pstrdup(pool, name),
+		     APR_HASH_KEY_STRING, value ?
+		     svn_string_dup(value, pool): (void *)0x1);
+
+	/* Dump the property headers and wait; close_file might need
+	   to write text headers too depending on whether
+	   apply_textdelta is called */
+	eb->dump_props_pending = TRUE;
+
+	return SVN_NO_ERROR;
+}
+
+static svn_error_t *window_handler(svn_txdelta_window_t *window, void *baton)
+{
+	struct handler_baton *hb = baton;
+	struct dump_edit_baton *eb = hb->eb;
+	static svn_error_t *err;
+
+	err = hb->apply_handler(window, hb->apply_baton);
+	if (window != NULL && !err)
+		return SVN_NO_ERROR;
+
+	if (err)
+		SVN_ERR(err);
+
+	/* Write information about the filepath to hb->eb */
+	eb->temp_filepath = apr_pstrdup(eb->pool,
+					hb->temp_filepath);
+
+	/* Cleanup */
+	SVN_ERR(svn_io_file_close(hb->temp_file, hb->pool));
+	SVN_ERR(svn_stream_close(hb->temp_filestream));
+	svn_pool_destroy(hb->pool);
 	return SVN_NO_ERROR;
 }
 
@@ -405,8 +494,38 @@ static svn_error_t *apply_textdelta(void *file_baton, const char *base_checksum,
 				    svn_txdelta_window_handler_t *handler,
 				    void **handler_baton)
 {
-	*handler = svn_delta_noop_window_handler;
-	*handler_baton = NULL;
+	struct dump_edit_baton *eb = file_baton;
+	apr_status_t apr_err;
+	const char *tempdir;
+
+	/* Custom handler_baton allocated in a separate pool */
+	apr_pool_t *handler_pool = svn_pool_create(pool);
+	struct handler_baton *hb = apr_pcalloc(handler_pool, sizeof(*hb));
+	hb->pool = handler_pool;
+	hb->eb = eb;
+
+	/* Use a temporary file to measure the text-content-length */
+	SVN_ERR(svn_io_temp_dir(&tempdir, hb->pool));
+
+	hb->temp_filepath = svn_dirent_join(tempdir, "XXXXXX", hb->pool);
+	apr_err = apr_file_mktemp(&(hb->temp_file), hb->temp_filepath,
+				  APR_CREATE | APR_READ | APR_WRITE | APR_EXCL,
+				  hb->pool);
+	if (apr_err != APR_SUCCESS)
+		SVN_ERR(svn_error_wrap_apr(apr_err, NULL));
+
+	hb->temp_filestream = svn_stream_from_aprfile2(hb->temp_file, TRUE, hb->pool);
+
+	/* Prepare to write the delta to the temporary file */
+	svn_txdelta_to_svndiff2(&(hb->apply_handler), &(hb->apply_baton),
+	                        hb->temp_filestream, 0, hb->pool);
+	eb->must_dump_text = TRUE;
+
+	/* The actual writing takes place when this function has finished */
+	/* Set the handler and handler_baton */
+	*handler = window_handler;
+	*handler_baton = hb;
+
 	return SVN_NO_ERROR;
 }
 
