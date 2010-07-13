@@ -533,6 +533,82 @@ static svn_error_t *close_file(void *file_baton,
 			       const char *text_checksum,
 			       apr_pool_t *pool)
 {
+	struct dump_edit_baton *eb = file_baton;
+	apr_file_t *temp_file;
+	svn_stream_t *temp_filestream;
+	apr_finfo_t *info = apr_pcalloc(pool, sizeof(apr_finfo_t));
+
+	/* We didn't write the property headers because we were
+	   waiting for file_prop_change; write them now */
+	SVN_ERR(dump_props(eb, &(eb->dump_props_pending), FALSE, pool));
+
+	/* The prop headers have already been dumped in dump_node */
+	/* Dump the text headers */
+	if (eb->must_dump_text) {
+		/* text-delta header */
+		SVN_ERR(svn_stream_printf(eb->stream, pool,
+					  SVN_REPOS_DUMPFILE_TEXT_DELTA
+					  ": true\n"));
+
+		/* Measure the length */
+		SVN_ERR(svn_io_stat(info, eb->temp_filepath, APR_FINFO_SIZE, pool));
+
+		/* text-content-length header */
+		SVN_ERR(svn_stream_printf(eb->stream, pool,
+					  SVN_REPOS_DUMPFILE_TEXT_CONTENT_LENGTH
+					  ": %lu\n",
+					  (unsigned long)info->size));
+		/* text-content-md5 header */
+		SVN_ERR(svn_stream_printf(eb->stream, pool,
+					  SVN_REPOS_DUMPFILE_TEXT_CONTENT_MD5
+					  ": %s\n",
+					  text_checksum));
+	}
+
+	/* content-length header: if both text and props are absent,
+	   skip this block */
+	if (eb->must_dump_props || eb->dump_props_pending)
+		SVN_ERR(svn_stream_printf(eb->stream, pool,
+					  SVN_REPOS_DUMPFILE_CONTENT_LENGTH
+					  ": %ld\n\n",
+					  (unsigned long)info->size + eb->propstring->len));
+	else if (eb->must_dump_text)
+		SVN_ERR(svn_stream_printf(eb->stream, pool,
+					  SVN_REPOS_DUMPFILE_CONTENT_LENGTH
+					  ": %ld\n\n",
+					  (unsigned long)info->size));
+
+	/* Dump the props; the propstring should have already been
+	   written in dump_node or above */
+	if (eb->must_dump_props || eb->dump_props_pending) {
+		SVN_ERR(svn_stream_write(eb->stream, eb->propstring->data,
+					 &(eb->propstring->len)));
+
+		/* Cleanup */
+		eb->must_dump_props = eb->dump_props_pending = FALSE;
+		apr_hash_clear(eb->properties);
+		apr_hash_clear(eb->del_properties);
+	}
+
+	/* Dump the text */
+	if (eb->must_dump_text) {
+
+		/* Open the temporary file, map it to a stream, copy
+		   the stream to eb->stream, close and delete the
+		   file */
+		SVN_ERR(svn_io_file_open(&temp_file, eb->temp_filepath, APR_READ, 0600, pool));
+		temp_filestream = svn_stream_from_aprfile2(temp_file, TRUE, pool);
+		SVN_ERR(svn_stream_copy3(temp_filestream, eb->stream, NULL, NULL, pool));
+
+		/* Cleanup */
+		SVN_ERR(svn_io_file_close(temp_file, pool));
+		SVN_ERR(svn_stream_close(temp_filestream));
+		SVN_ERR(svn_io_remove_file2(eb->temp_filepath, TRUE, pool));
+		eb->must_dump_text = FALSE;
+	}
+
+	SVN_ERR(svn_stream_printf(eb->stream, pool, "\n\n"));
+
 	return SVN_NO_ERROR;
 }
 
