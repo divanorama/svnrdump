@@ -27,6 +27,9 @@ load_editor.lo: load_editor.c load_editor.h
 svnrdump.lo: svnrdump.c dump_editor.h load_editor.h svn17_compat.h
 svn17_compat.lo: svn17_compat.c svn17_compat.h
 
+check: svnrdump$(EXEEXT) svnrdump_tests.py
+	$(PYTHON) svnrdump_tests.py
+
 clean:
 	$(RM) svnrdump$(EXEEXT)
 	$(RM) *.lo *.o
