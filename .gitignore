@@ -1,0 +1,5 @@
+*.lo
+*.o
+*.pyc
+/svn-test-work/
+/svnrdump
