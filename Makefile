@@ -23,7 +23,7 @@ svnrdump$(EXEEXT): $(OBJECTS)
 	$(LT_COMPILE) -o $@ -c $<
 
 dump_editor.lo: dump_editor.c dump_editor.h svn17_compat.h
-load_editor.lo: load_editor.c load_editor.h
+load_editor.lo: load_editor.c load_editor.h svn17_compat.h
 svnrdump.lo: svnrdump.c dump_editor.h load_editor.h svn17_compat.h
 svn17_compat.lo: svn17_compat.c svn17_compat.h
 

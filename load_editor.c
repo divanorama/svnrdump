@@ -31,6 +31,7 @@
 #include "svn_ra.h"
 #include "svn_io.h"
 
+#include "svn17_compat.h"
 #include "load_editor.h"
 
 static svn_error_t *
