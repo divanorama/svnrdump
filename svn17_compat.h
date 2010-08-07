@@ -57,6 +57,42 @@ svn_uri_join(const char *base,
              const char *component,
              apr_pool_t *pool);
 
+/** Join a base relpath (@a base) with a component (@a component), allocating
+ * the result in @a pool. @a component need not be a single component.
+ *
+ * If either @a base or @a component is the empty path, then the other
+ * argument will be copied and returned.  If both are the empty path the
+ * empty path is returned.
+ *
+ * From svn_dirent_uri.h.
+ */
+char *
+svn_relpath_join(const char *base,
+                 const char *component,
+                 apr_pool_t *pool);
+
+/** Return the longest common path shared by two relative paths,
+ * @a relpath1 and @a relpath2.  If there's no common ancestor, return the
+ * empty path.
+ *
+ * From svn_dirent_uri.h.
+ */
+char *
+svn_relpath_get_longest_ancestor(const char *relpath1,
+                                 const char *relpath2,
+                                 apr_pool_t *pool);
+
+/** Return the relative path part of @a child_relpath that is below
+ * @a parent_relpath, or just "" if @a parent_relpath is equal to
+ * @a child_relpath. If @a child_relpath is not below @a parent_relpath,
+ * return @a child_relpath.
+ *
+ * From svn_dirent_uri.h.
+ */
+const char *
+svn_relpath_skip_ancestor(const char *parent_relpath,
+                          const char *child_relpath);
+
 /** Get the basename of the specified canonicalized @a relpath.  The
  * basename is defined as the last component of the relpath.  If the @a
  * relpath has only one component then that is returned. The returned
@@ -74,6 +110,19 @@ svn_uri_join(const char *base,
 const char *
 svn_relpath_basename(const char *uri,
                      apr_pool_t *pool);
+
+/** Get the dirname of the specified canonicalized @a relpath, defined as
+ * the relpath with its basename removed.
+ *
+ * If @a relpath is empty, "" is returned.
+ *
+ * The returned relpath will be allocated in @a pool.
+ *
+ * From svn_dirent_uri.h.
+ */
+char *
+svn_relpath_dirname(const char *relpath,
+                    apr_pool_t *pool);
 
 /** Gets the name of the specified canonicalized @a dirent as it is known
  * within its parent directory. If the @a dirent is root, return "". The
@@ -114,6 +163,25 @@ svn_dirent_basename(const char *dirent,
 const char *
 svn_uri_canonicalize(const char *uri,
                      apr_pool_t *pool);
+
+/** Return a new relpath like @a relpath, but transformed such that some types
+ * of relpath specification redundancies are removed.
+ *
+ * This involves collapsing redundant "/./" elements, removing
+ * multiple adjacent separator characters, removing trailing
+ * separator characters, and possibly other semantically inoperative
+ * transformations.
+ *
+ * This functions supports relpaths.
+ *
+ * The returned relpath may be statically allocated or allocated from @a
+ * pool.
+ *
+ * From svn_dirent_uri.h.
+ */
+const char *
+svn_relpath_canonicalize(const char *uri,
+                         apr_pool_t *pool);
 
 /** Remove file @a path, a utf8-encoded path.  This wraps apr_file_remove(),
  * converting any error to a Subversion error. If @a ignore_enoent is TRUE, and

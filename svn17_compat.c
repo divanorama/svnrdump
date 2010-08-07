@@ -400,6 +400,39 @@ svn_relpath_basename(const char *relpath,
     return relpath + start;
 }
 
+/* Return the length of substring necessary to encompass the entire
+ * previous relpath segment in RELPATH, which should be a LEN byte string.
+ *
+ * A trailing slash will not be included in the returned length.
+ * From libsvn_subr/dirent_uri.c.
+ */
+static apr_size_t
+relpath_previous_segment(const char *relpath,
+                         apr_size_t len)
+{
+  if (len == 0)
+    return 0;
+
+  --len;
+  while (len > 0 && relpath[len] != '/')
+    --len;
+
+  return len;
+}
+
+/* From libsvn_subr/dirent_uri.c. */
+char *
+svn_relpath_dirname(const char *relpath,
+                    apr_pool_t *pool)
+{
+  apr_size_t len = strlen(relpath);
+
+  assert(svn_relpath_is_canonical(relpath, pool));
+
+  return apr_pstrmemdup(pool, relpath,
+                        relpath_previous_segment(relpath, len));
+}
+
 /* From libsvn_subr/dirent_uri.c. */
 const char *
 svn_dirent_basename(const char *dirent, apr_pool_t *pool)
@@ -426,6 +459,179 @@ svn_dirent_basename(const char *dirent, apr_pool_t *pool)
     return apr_pstrmemdup(pool, dirent + start, len - start);
   else
     return dirent + start;
+}
+
+/* Return the string length of the longest common ancestor of PATH1 and PATH2.
+ * Pass type_uri for TYPE if PATH1 and PATH2 are URIs, and type_dirent if
+ * PATH1 and PATH2 are regular paths.
+ *
+ * If the two paths do not share a common ancestor, return 0.
+ *
+ * New strings are allocated in POOL.
+ * From libsvn_sbur/dirent_uri.c.
+ */
+static apr_size_t
+get_longest_ancestor_length(path_type_t types,
+                            const char *path1,
+                            const char *path2,
+                            apr_pool_t *pool)
+{
+  apr_size_t path1_len, path2_len;
+  apr_size_t i = 0;
+  apr_size_t last_dirsep = 0;
+#ifdef SVN_USE_DOS_PATHS
+  svn_boolean_t unc = FALSE;
+#endif
+
+  path1_len = strlen(path1);
+  path2_len = strlen(path2);
+
+  if (SVN_PATH_IS_EMPTY(path1) || SVN_PATH_IS_EMPTY(path2))
+    return 0;
+
+  while (path1[i] == path2[i])
+    {
+      /* Keep track of the last directory separator we hit. */
+      if (path1[i] == '/')
+        last_dirsep = i;
+
+      i++;
+
+      /* If we get to the end of either path, break out. */
+      if ((i == path1_len) || (i == path2_len))
+        break;
+    }
+
+  /* two special cases:
+     1. '/' is the longest common ancestor of '/' and '/foo' */
+  if (i == 1 && path1[0] == '/' && path2[0] == '/')
+    return 1;
+  /* 2. '' is the longest common ancestor of any non-matching
+   * strings 'foo' and 'bar' */
+  if (types == type_dirent && i == 0)
+    return 0;
+
+  /* Handle some windows specific cases */
+#ifdef SVN_USE_DOS_PATHS
+  if (types == type_dirent)
+    {
+      /* don't count the '//' from UNC paths */
+      if (last_dirsep == 1 && path1[0] == '/' && path1[1] == '/')
+        {
+          last_dirsep = 0;
+          unc = TRUE;
+        }
+
+      /* X:/ and X:/foo */
+      if (i == 3 && path1[2] == '/' && path1[1] == ':')
+        return i;
+
+      /* Cannot use SVN_ERR_ASSERT here, so we'll have to crash, sorry.
+       * Note that this assertion triggers only if the code above has
+       * been broken. The code below relies on this assertion, because
+       * it uses [i - 1] as index. */
+      assert(i > 0);
+
+      /* X: and X:/ */
+      if ((path1[i - 1] == ':' && path2[i] == '/') ||
+          (path2[i - 1] == ':' && path1[i] == '/'))
+          return 0;
+      /* X: and X:foo */
+      if (path1[i - 1] == ':' || path2[i - 1] == ':')
+          return i;
+    }
+#endif /* SVN_USE_DOS_PATHS */
+
+  /* last_dirsep is now the offset of the last directory separator we
+     crossed before reaching a non-matching byte.  i is the offset of
+     that non-matching byte, and is guaranteed to be <= the length of
+     whichever path is shorter.
+     If one of the paths is the common part return that. */
+  if (((i == path1_len) && (path2[i] == '/'))
+           || ((i == path2_len) && (path1[i] == '/'))
+           || ((i == path1_len) && (i == path2_len)))
+    return i;
+  else
+    {
+      /* Nothing in common but the root folder '/' or 'X:/' for Windows
+         dirents. */
+#ifdef SVN_USE_DOS_PATHS
+      if (! unc)
+        {
+          /* X:/foo and X:/bar returns X:/ */
+          if ((types == type_dirent) &&
+              last_dirsep == 2 && path1[1] == ':' && path1[2] == '/'
+                               && path2[1] == ':' && path2[2] == '/')
+            return 3;
+#endif /* SVN_USE_DOS_PATHS */
+          if (last_dirsep == 0 && path1[0] == '/' && path2[0] == '/')
+            return 1;
+#ifdef SVN_USE_DOS_PATHS
+        }
+#endif
+    }
+
+  return last_dirsep;
+}
+
+/* From libsvn_subr/dirent_uri.c. */
+char *
+svn_relpath_get_longest_ancestor(const char *relpath1,
+                                 const char *relpath2,
+                                 apr_pool_t *pool)
+{
+  return apr_pstrndup(pool, relpath1,
+                      get_longest_ancestor_length(type_relpath, relpath1,
+                                                  relpath2, pool));
+}
+
+/* From libsvn_subr/dirent_uri.c. */
+const char *
+svn_relpath_skip_ancestor(const char *parent_relpath,
+                          const char *child_relpath)
+{
+  apr_size_t len = strlen(parent_relpath);
+
+  if (0 != memcmp(parent_relpath, child_relpath, len))
+    return child_relpath; /* parent_relpath is no ancestor of child_relpath */
+
+  if (child_relpath[len] == 0)
+    return ""; /* parent_relpath == child_relpath */
+
+  if (len == 1 && child_relpath[0] == '/')
+    return child_relpath + 1;
+
+  if (child_relpath[len] == '/')
+    return child_relpath + len + 1;
+
+  return child_relpath;
+}
+
+/* From libsvn_subr/dirent_uri.c. */
+char *
+svn_relpath_join(const char *base,
+                 const char *component,
+                 apr_pool_t *pool)
+{
+  apr_size_t blen = strlen(base);
+  apr_size_t clen = strlen(component);
+  char *path;
+
+  assert(svn_relpath_is_canonical(base, pool));
+  assert(svn_relpath_is_canonical(component, pool));
+
+  /* If either is empty return the other */
+  if (blen == 0)
+    return apr_pmemdup(pool, component, clen + 1);
+  if (clen == 0)
+    return apr_pmemdup(pool, base, blen + 1);
+
+  path = apr_palloc(pool, blen + 1 + clen + 1);
+  memcpy(path, base, blen);
+  path[blen] = '/';
+  memcpy(path + blen + 1, component, clen + 1);
+
+  return path;
 }
 
 /* Locale insensitive tolower() for converting parts of dirents and urls
@@ -747,6 +953,13 @@ const char *
 svn_uri_canonicalize(const char *uri, apr_pool_t *pool)
 {
   return canonicalize(type_uri, uri, pool);
+}
+
+/* From libsvn_subr/dirent_uri.c. */
+const char *
+svn_relpath_canonicalize(const char *relpath, apr_pool_t *pool)
+{
+  return canonicalize(type_relpath, relpath, pool);
 }
 
 /* New code (public domain). */
