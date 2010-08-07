@@ -119,7 +119,8 @@ def run_load_test(sbox, dumpfile_name):
 
   # Compare the output from stdout
   svntest.verify.compare_and_display_lines(
-    "Dump files", "DUMP", svnrdump_dumpfile, svnadmin_dumpfile)
+    "Dump files", "DUMP", svntest.verify.UnorderedOutput(svnrdump_dumpfile),
+    svnadmin_dumpfile)
 
 ######################################################################
 # Tests
