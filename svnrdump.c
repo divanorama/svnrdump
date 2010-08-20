@@ -53,18 +53,17 @@ enum svn_svnrdump__longopt_t
 
 static const svn_opt_subcommand_desc2_t svnrdump__cmd_table[] =
   {
-    { "dump", dump_cmd, { "d" },
+    { "dump", dump_cmd, { 0 },
       N_("usage: svnrdump dump URL [-r LOWER[:UPPER]]\n\n"
          "Dump revisions LOWER to UPPER of repository at remote URL "
          "to stdout in a 'dumpfile' portable format.\n"
          "If omitted, LOWER defaults to zero and UPPER to the latest "
          "latest revision.\n"),
       { 0 } },
-    { "load", load_cmd, { "l" },
+    { "load", load_cmd, { 0 },
       N_("usage: svnrdump load URL\n\n"
          "Load a 'dumpfile' given on stdin to a repository "
-         "at remote URL.\n"
-         "## This feature is not yet available.\n"),
+         "at remote URL.\n"),
       { 0 } },
     { "help", 0, { "?", "h" },
       N_("usage: svnrdump help [SUBCOMMAND...]\n\n"
@@ -179,7 +178,7 @@ replay_revend(svn_revnum_t revision,
   /* No resources left to free. */
   struct replay_baton *rb = replay_baton;
   if (! rb->quiet)
-    svn_cmdline_fprintf(stderr, pool, "* Dumped revision %lu\n", revision);
+    svn_cmdline_fprintf(stderr, pool, "* Dumped revision %lu.\n", revision);
   return SVN_NO_ERROR;
 }
 
@@ -288,7 +287,7 @@ replay_revisions(svn_ra_session_t *session, const char *url,
                                &(propstring->len)));
       SVN_ERR(svn_stream_printf(stdout_stream, pool, "\n"));
       if (! quiet)
-        svn_cmdline_fprintf(stderr, pool, "* Dumped revision %lu\n", start_revision);
+        svn_cmdline_fprintf(stderr, pool, "* Dumped revision %lu.\n", start_revision);
 
       start_revision++;
     }
