@@ -42,6 +42,7 @@
 #include <svn_io.h>
 #include <svn_dirent_uri.h>
 #include <svn_path.h>
+#include <svn_ctype.h>
 #include "svn17_compat.h"
 
 /* TRUE if s is the canonical empty path, FALSE otherwise
@@ -212,7 +213,7 @@ svn_uri_is_canonical(const char *uri, apr_pool_t *pool)
               char digitz[3];
               int val;
 
-              /* Can't use apr_isxdigit() because lower case letters are
+              /* Can't use svn_ctype_isxdigit() because lower case letters are
                  not in our canonical format */
               if (((*(ptr+1) < '0' || *(ptr+1) > '9'))
                   && (*(ptr+1) < 'A' || *(ptr+1) > 'F'))
@@ -867,7 +868,8 @@ canonicalize(path_type_t type, const char *path, apr_pool_t *pool)
               case '/':
                 break;
               case '%':
-                if (!apr_isxdigit(*(src+1)) || !apr_isxdigit(*(src+2)))
+                if (!svn_ctype_isxdigit(*(src+1)) ||
+                    !svn_ctype_isxdigit(*(src+2)))
                   need_extra += 2;
                 else
                   src += 2;
@@ -903,7 +905,8 @@ canonicalize(path_type_t type, const char *path, apr_pool_t *pool)
                 *(dst++) = '/';
                 break;
               case '%':
-                if (!apr_isxdigit(*(src+1)) || !apr_isxdigit(*(src+2)))
+                if (!svn_ctype_isxdigit(*(src+1)) ||
+                    !svn_ctype_isxdigit(*(src+2)))
                   {
                     *(dst++) = '%';
                     *(dst++) = '2';
