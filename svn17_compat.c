@@ -469,7 +469,7 @@ svn_dirent_basename(const char *dirent, apr_pool_t *pool)
  * If the two paths do not share a common ancestor, return 0.
  *
  * New strings are allocated in POOL.
- * From libsvn_sbur/dirent_uri.c.
+ * From libsvn_subr/dirent_uri.c.
  */
 static apr_size_t
 get_longest_ancestor_length(path_type_t types,
