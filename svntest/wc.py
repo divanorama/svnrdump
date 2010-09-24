@@ -825,8 +825,9 @@ def text_base_path(file_path):
   while True:
     db_path = os.path.join(root_path, dot_svn, 'wc.db')
     try:
-      db = svntest.sqlite3.connect(db_path)
-      break
+      if os.path.exists(db_path):
+        db = svntest.sqlite3.connect(db_path)
+        break
     except: pass
     head, tail = os.path.split(root_path)
     if head == root_path:
@@ -835,14 +836,23 @@ def text_base_path(file_path):
     relpath = os.path.join(tail, relpath).replace(os.sep, '/')
 
   c = db.cursor()
-  c.execute("""select checksum from working_node
-               where local_relpath = '""" + relpath + """'""")
-  checksum = c.fetchone()
-  if checksum is None:
+  # NODES conversion is complete enough that we can use it if it exists
+  c.execute("""pragma table_info(nodes)""")
+  if c.fetchone():
+    c.execute("""select checksum from nodes
+                 where local_relpath = '""" + relpath + """'
+                 and op_depth = 0""")
+  else:
     c.execute("""select checksum from base_node
                  where local_relpath = '""" + relpath + """'""")
-    checksum = c.fetchone()[0]
-  if checksum is None or checksum[0:6] != "$sha1$":
+  row = c.fetchone()
+  if row is not None:
+    checksum = row[0]
+    if checksum is not None and checksum[0:6] == "$md5 $":
+      c.execute("""select checksum from pristine
+                   where md5_checksum = '""" + checksum + """'""")
+      checksum = c.fetchone()[0]
+  if row is None or checksum is None:
     raise svntest.Failure("No SHA1 checksum for " + relpath)
   db.close()
 
@@ -853,8 +863,7 @@ def text_base_path(file_path):
   if os.path.isfile(fn):
     return fn
 
-  # Calculate per dir location
-  return os.path.join(root_path, dot_svn, 'pristine', checksum)
+  raise svntest.Failure("No pristine text for " + relpath)
 
 
 # ------------
