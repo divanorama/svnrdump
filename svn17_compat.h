@@ -195,6 +195,27 @@ svn_io_remove_file2(const char *path,
                    svn_boolean_t ignore_enoent,
                    apr_pool_t *scratch_pool);
 
+
+/** @defgroup apr_hash_utilities APR Hash Table Helpers
+ * These functions enable the caller to dereference an APR hash table index
+ * without type casts or temporary variables.
+ *
+ * ### These are private, and may go away when APR implements them natively.
+ *
+ * From svn_types.h.
+ * @{
+ */
+
+/** Return the key of the hash table entry indexed by @a hi. */
+const void *
+svn__apr_hash_index_key(const apr_hash_index_t *hi);
+
+/** Return the value of the hash table entry indexed by @a hi. */
+void *
+svn__apr_hash_index_val(const apr_hash_index_t *hi);
+
+/** @} */
+
 /* From svn_private_config.h.
  */
 #define PACKAGE_NAME "subversion"
