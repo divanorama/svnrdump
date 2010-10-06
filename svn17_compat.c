@@ -987,7 +987,7 @@ svn_io_remove_file2(const char *path,
  * APR.  (A compiler may warn about casting away 'const', but at least this
  * cast is explicit and gathered in one place.)
  *
- * From libsvn_subr/hash.c. */
+ * From libsvn_subr/iter.c. */
 const void *svn__apr_hash_index_key(const apr_hash_index_t *hi)
 {
   const void *key;
@@ -1063,15 +1063,13 @@ svn_cmdline__parse_config_option(apr_array_header_t *config_options,
               config_option->section = apr_pstrndup(pool, first_colon + 1,
                                                     second_colon - first_colon - 1);
               config_option->option = apr_pstrndup(pool, second_colon + 1,
-                                                   equals_sign - second_colon -
-1);
+                                                   equals_sign - second_colon - 1);
 
               if (! (strchr(config_option->option, ':')))
                 {
                   config_option->value = apr_pstrndup(pool, equals_sign + 1,
                                                       opt_arg + len - equals_sign - 1);
-                  APR_ARRAY_PUSH(config_options, svn_cmdline__config_argument_t
-*)
+                  APR_ARRAY_PUSH(config_options, svn_cmdline__config_argument_t *)
                                        = config_option;
                   return SVN_NO_ERROR;
                 }
