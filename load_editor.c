@@ -65,7 +65,10 @@ commit_callback(const svn_commit_info_t *commit_info,
  * applications to avoid duplication.
  */
 static svn_error_t *
-get_lock(svn_ra_session_t *session, apr_pool_t *pool)
+get_lock(svn_ra_session_t *session,
+         svn_cancel_func_t cancel_func,
+         void *cancel_baton,
+         apr_pool_t *pool)
 {
   char hostname_str[APRMAXHOSTLEN + 1] = { 0 };
   svn_string_t *mylocktoken, *reposlocktoken;
@@ -86,23 +89,24 @@ get_lock(svn_ra_session_t *session, apr_pool_t *pool)
     {
       svn_pool_clear(subpool);
 
+      SVN_ERR(cancel_func(cancel_baton));
       SVN_ERR(svn_ra_rev_prop(session, 0, SVNRDUMP_PROP_LOCK, &reposlocktoken,
                               subpool));
 
       if (reposlocktoken)
         {
-          /* Did we get it? If so, we're done, otherwise we sleep. */
+          /* Did we get it? If so, we're done. */
           if (strcmp(reposlocktoken->data, mylocktoken->data) == 0)
             return SVN_NO_ERROR;
-          else
-            {
-              SVN_ERR(svn_cmdline_printf
-                      (pool, _("Failed to get lock on destination "
-                               "repos, currently held by '%s'\n"),
-                       reposlocktoken->data));
 
-              apr_sleep(apr_time_from_sec(1));
-            }
+          /* ...otherwise, tell the user that someone else has the
+             lock and sleep before retrying. */
+          SVN_ERR(svn_cmdline_printf
+                  (pool, _("Failed to get lock on destination "
+                           "repos, currently held by '%s'\n"),
+                   reposlocktoken->data));
+          
+          apr_sleep(apr_time_from_sec(1));
         }
       else if (i < LOCK_RETRIES - 1)
         {
@@ -611,15 +615,17 @@ drive_dumpstream_loader(svn_stream_t *stream,
                         const svn_repos_parse_fns2_t *parser,
                         void *parse_baton,
                         svn_ra_session_t *session,
+                        svn_cancel_func_t cancel_func,
+                        void *cancel_baton,
                         apr_pool_t *pool)
 {
   struct parse_baton *pb;
   pb = parse_baton;
 
-  SVN_ERR(get_lock(session, pool));
+  SVN_ERR(get_lock(session, cancel_func, cancel_baton, pool));
   SVN_ERR(svn_ra_get_repos_root2(session, &(pb->root_url), pool));
   SVN_ERR(svn_repos_parse_dumpstream2(stream, parser, parse_baton,
-                                      NULL, NULL, pool));
+                                      cancel_func, cancel_baton, pool));
   SVN_ERR(svn_ra_change_rev_prop(session, 0, SVNRDUMP_PROP_LOCK, NULL, pool));
 
   return SVN_NO_ERROR;
